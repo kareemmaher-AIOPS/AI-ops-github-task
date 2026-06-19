@@ -1,0 +1,120 @@
+name: Monorepo CI/CD Pipeline
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - '.github/workflows/ci.cd.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - '.github/workflows/ci.cd.yml'
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Job 1 – Test Matrix (parallel, 3 Node versions)
+  # ─────────────────────────────────────────────
+  test_matrix:
+    name: Test – Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['18.x', '20.x', '22.x']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: src/backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: src/backend
+        run: npm ci
+
+      - name: Run tests
+        working-directory: src/backend
+        run: npm test
+
+  # ─────────────────────────────────────────────
+  # Job 2 – SonarQube Analysis (parallel with test_matrix)
+  # ─────────────────────────────────────────────
+  sonarqube_analysis:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run SonarQube Scanner
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  # ─────────────────────────────────────────────
+  # Job 3 – Simulate Deployment (sequential, needs both above)
+  # ─────────────────────────────────────────────
+  simulate_deployment:
+    name: Simulate Deployment
+    runs-on: ubuntu-latest
+    needs:
+      - test_matrix
+      - sonarqube_analysis
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy frontend service
+        run: |
+          echo "▶ Deploying frontend service…"
+          echo "  Source: src/frontend/"
+          echo "  Status: SUCCESS"
+
+      - name: Deploy backend service
+        run: |
+          echo "▶ Deploying backend service…"
+          echo "  Source: src/backend/"
+          echo "  Status: SUCCESS"
+
+      - name: Deployment health check
+        run: |
+          echo "✔ All services healthy – deployment complete."
+
+  # ─────────────────────────────────────────────
+  # Job 4 – Create GitHub Release (tag pushes only)
+  # ─────────────────────────────────────────────
+  create_release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: simulate_deployment
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
